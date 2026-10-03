@@ -1,0 +1,11 @@
+[
+  {
+    "title": "Lecture 1",
+    "video": "lecture.mp4",
+    "srt": "lecture.en.srt"
+  },
+  {
+    "title": "Lecture 2",
+    "video": "https://example.com/lecture.mp4"
+  }
+]

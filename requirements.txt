@@ -1,0 +1,6 @@
+mlx-qwen3-asr>=0.4.4
+mlx-lm>=0.32.0
+mlx-audio>=0.5.0
+soundfile>=0.12
+numpy>=1.26
+yt-dlp>=2024.1.1

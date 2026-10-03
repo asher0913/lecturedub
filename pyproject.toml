@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lecturedub"
+version = "0.1.0"
+description = "Timestamp-aligned Chinese dubbing for lecture videos, running locally on Apple Silicon."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "lecturedub contributors"}]
+dependencies = [
+  "mlx-qwen3-asr>=0.4.4",
+  "mlx-lm>=0.32.0",
+  "mlx-audio>=0.5.0",
+  "soundfile>=0.12",
+  "numpy>=1.26",
+  "yt-dlp>=2024.1.1",
+]
+
+[project.scripts]
+lecturedub = "lecturedub.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["lecturedub*"]
+
+[tool.setuptools.package-data]
+lecturedub = ["static/*"]

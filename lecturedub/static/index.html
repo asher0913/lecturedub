@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>lecturedub</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1c1915;
+      --muted: #6b645c;
+      --paper: #f4efe6;
+      --card: #fffaf3;
+      --line: #e2d8c8;
+      --accent: #9c341f;
+      --ok: #2f6b4f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(900px 420px at 10% -10%, #f7e1d4, transparent 60%),
+        var(--paper);
+      color: var(--ink);
+      font: 16px/1.5 "Avenir Next", "PingFang SC", "Noto Sans SC", sans-serif;
+    }
+    main { max-width: 820px; margin: 0 auto; padding: 48px 20px 80px; }
+    h1 { font-family: "Iowan Old Style", "Songti SC", serif; font-size: 46px; font-weight: 600; margin: 0; letter-spacing: -0.03em; }
+    .lede { color: var(--muted); max-width: 38em; margin: 10px 0 28px; }
+    form, .job {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+    }
+    .drop {
+      border: 1.5px dashed #c8b8a4;
+      border-radius: 14px;
+      min-height: 160px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 24px;
+      background: #fff;
+      cursor: pointer;
+    }
+    .drop.hot { border-color: var(--accent); background: #fff5ef; }
+    label { display: block; margin: 16px 0 6px; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font: inherit;
+    }
+    button {
+      margin-top: 16px;
+      background: var(--accent);
+      color: white;
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font: inherit;
+      cursor: pointer;
+    }
+    .jobs { margin-top: 22px; display: grid; gap: 12px; }
+    .job { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+    .status { color: var(--muted); font-size: 14px; }
+    .status.done { color: var(--ok); }
+    .status.error { color: var(--accent); white-space: pre-wrap; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>lecturedub</h1>
+    <p class="lede">把一节英文课拖进来，或者贴上视频链接。它会在这台 Mac 的 GPU 上转录、改成口语中文，再按原来的时间轴配音，替换掉英文音轨。</p>
+    <form id="form">
+      <div class="drop" id="drop">
+        <div>
+          <strong>拖入视频</strong>
+          <div class="status" id="file-label">也可以只贴下面的链接。有英文字幕的话一并拖进来。</div>
+        </div>
+      </div>
+      <input id="video" type="file" accept="video/*,.mp4,.mkv,.webm,.mov,.srt,.vtt" hidden />
+      <label for="url">视频链接</label>
+      <input id="url" type="url" placeholder="https://..." />
+      <label for="voice">中文声音</label>
+      <select id="voice">
+        <option value="Uncle_Fu">Uncle Fu · 低沉男声，适合讲课</option>
+        <option value="Serena">Serena · 温和女声</option>
+        <option value="Vivian">Vivian · 明亮女声</option>
+      </select>
+      <button type="submit">开始配音</button>
+    </form>
+    <section class="jobs" id="jobs"></section>
+  </main>
+  <script>
+    const drop = document.querySelector("#drop");
+    const video = document.querySelector("#video");
+    const jobs = document.querySelector("#jobs");
+    const fileLabel = document.querySelector("#file-label");
+    let srtFile = null;
+    drop.addEventListener("click", () => video.click());
+    ["dragover", "dragenter"].forEach((name) => drop.addEventListener(name, (event) => {
+      event.preventDefault();
+      drop.classList.add("hot");
+    }));
+    ["dragleave", "drop"].forEach((name) => drop.addEventListener(name, (event) => {
+      event.preventDefault();
+      drop.classList.remove("hot");
+    }));
+    drop.addEventListener("drop", (event) => takeFiles(event.dataTransfer.files));
+    video.addEventListener("change", () => takeFiles(video.files));
+    function takeFiles(list) {
+      for (const file of list) {
+        if (/\.(srt|vtt)$/i.test(file.name)) srtFile = file;
+        else {
+          const transfer = new DataTransfer();
+          transfer.items.add(file);
+          video.files = transfer.files;
+          fileLabel.textContent = file.name;
+        }
+      }
+      if (srtFile) fileLabel.textContent += `  ·  字幕 ${srtFile.name}`;
+    }
+    document.querySelector("#form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData();
+      if (video.files[0]) data.append("video", video.files[0]);
+      if (srtFile) data.append("srt", srtFile);
+      data.append("url", document.querySelector("#url").value.trim());
+      data.append("title", video.files[0] ? video.files[0].name.replace(/\.[^.]+$/, "") : "lecture");
+      const response = await fetch("/api/jobs", { method: "POST", body: data });
+      const job = await response.json();
+      if (!response.ok) {
+        alert(job.error || "没有收到视频");
+        return;
+      }
+      document.querySelector("#url").value = "";
+      srtFile = null;
+      video.value = "";
+      fileLabel.textContent = "也可以只贴下面的链接。有英文字幕的话一并拖进来。";
+      refresh();
+    });
+    async function refresh() {
+      const response = await fetch("/api/jobs");
+      const payload = await response.json();
+      jobs.innerHTML = "";
+      for (const job of payload.jobs.slice().reverse()) {
+        const row = document.createElement("article");
+        row.className = "job";
+        const status = job.status === "done"
+          ? `<a href="/files/${job.id}/dubbed.mp4">下载配音视频</a>`
+          : (job.error || job.status);
+        row.innerHTML = `<div><strong>${job.title}</strong><div class="status ${job.status}">${status}</div></div>`;
+        jobs.appendChild(row);
+      }
+    }
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+work/
+output/
+models/
+*.mp4
+*.wav
+*.mov
+*.mkv
+.hf/
