@@ -10,9 +10,11 @@ def _tool(name: str) -> str:
     found = shutil.which(name)
     if found:
         return found
-    brew = Path(f"/opt/homebrew/bin/{name}")
-    if brew.exists():
-        return str(brew)
+    # Finder and launchd start apps with a short PATH, so Homebrew is invisible.
+    for prefix in ("/opt/homebrew/bin", "/usr/local/bin"):
+        candidate = Path(prefix) / name
+        if candidate.exists():
+            return str(candidate)
     return name
 
 

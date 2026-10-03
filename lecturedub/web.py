@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import subprocess
+import sys
 import threading
 import traceback
 import uuid
@@ -11,26 +13,27 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from .pipeline import ROOT, run_batch
+from . import __version__
+from .paths import data_home
+from .pipeline import run_batch
 from .voice import DEFAULT_VOICE
 
 JOBS: dict[str, dict] = {}
 QUEUE: list[str] = []
 LOCK = threading.Lock()
 STATIC = Path(__file__).with_name("static")
+_WORKER_STARTED = False
+_SERVING = False
 
 
 def _work_root(job_id: str) -> Path:
-    return ROOT / "work" / "app" / job_id
+    return data_home() / "jobs" / job_id
 
 
 def _worker(voice: str) -> None:
     while True:
         with LOCK:
-            if not QUEUE:
-                job_id = None
-            else:
-                job_id = QUEUE.pop(0)
+            job_id = QUEUE.pop(0) if QUEUE else None
         if job_id is None:
             threading.Event().wait(0.4)
             continue
@@ -49,7 +52,7 @@ def _worker(voice: str) -> None:
                 [item],
                 work_root=_work_root(job_id),
                 output_root=_work_root(job_id) / "out",
-                voice=voice,
+                voice=job.get("voice") or voice,
             )
             produced = _work_root(job_id) / "out" / "video" / "dubbed.mp4"
             job["output"] = str(produced)
@@ -97,18 +100,82 @@ def _parts(body: bytes, content_type: str) -> list[dict]:
     return parts
 
 
+def _progress(job_id: str) -> dict:
+    path = _work_root(job_id) / "progress.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _output_files(job: dict) -> list[str]:
+    raw = job.get("output") or ""
+    if not raw:
+        return []
+    video = Path(raw)
+    names = [video.name, f"{video.stem}.zh.srt", f"{video.stem}.en.srt"]
+    return [name for name in names if (video.parent / name).is_file()]
+
+
+def _public_job(job: dict) -> dict:
+    progress = _progress(job["id"]) if job.get("status") == "running" else {}
+    return {
+        "id": job["id"],
+        "title": job["title"],
+        "status": job["status"],
+        "error": job.get("error") or "",
+        "stage": progress.get("stage") or "",
+        "done": progress.get("done"),
+        "total": progress.get("total"),
+        "files": _output_files(job),
+    }
+
+
+def _safe_output(job_id: str, name: str) -> Path | None:
+    job = JOBS.get(job_id)
+    if not job or not job.get("output"):
+        return None
+    video = Path(job["output"])
+    target = (video.parent / name).resolve()
+    if target.parent != video.parent.resolve() or not target.is_file():
+        return None
+    if target.name not in _output_files(job):
+        return None
+    return target
+
+
 class Handler(BaseHTTPRequestHandler):
     voice = DEFAULT_VOICE
 
     def log_message(self, fmt: str, *args) -> None:
         print(f"ui  {self.address_string()}  {fmt % args}", flush=True)
 
-    def _send(self, code: int, body: bytes, content_type: str) -> None:
+    def _send(self, code: int, body: bytes, content_type: str, filename: str | None = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        if filename:
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_file(self, target: Path) -> None:
+        kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        size = target.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Disposition", f'attachment; filename="{target.name}"')
+        self.end_headers()
+        with target.open("rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
 
     def _json(self, code: int, payload: dict) -> None:
         self._send(code, json.dumps(payload, ensure_ascii=False).encode(), "application/json")
@@ -119,9 +186,13 @@ class Handler(BaseHTTPRequestHandler):
             page = (STATIC / "index.html").read_bytes()
             self._send(200, page, "text/html; charset=utf-8")
             return
+        if path == "/api/config":
+            self._json(200, {"voice": self.voice, "version": __version__})
+            return
         if path == "/api/jobs":
             with LOCK:
-                self._json(200, {"jobs": list(JOBS.values())})
+                payload = [_public_job(job) for job in JOBS.values()]
+            self._json(200, {"jobs": payload})
             return
         if path.startswith("/files/"):
             parts = [unquote(part) for part in path.split("/") if part]
@@ -129,26 +200,24 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(404, {"error": "not ready"})
                 return
             _, job_id, name = parts
-            job = JOBS.get(unquote(job_id))
-            if not job or not job.get("output"):
+            target = _safe_output(job_id, name)
+            if target is None:
                 self._json(404, {"error": "not ready"})
                 return
-            target = Path(job["output"])
-            if name != target.name or not target.exists():
-                self._json(404, {"error": "missing file"})
-                return
-            kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-            data = target.read_bytes()
-            self._send(200, data, kind)
+            self._send_file(target)
             return
         self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/jobs":
-            self._json(404, {"error": "not found"})
-            return
+        route = urlparse(self.path).path
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
+        if route == "/api/reveal":
+            self._reveal(body)
+            return
+        if route != "/api/jobs":
+            self._json(404, {"error": "not found"})
+            return
         content_type = self.headers.get("Content-Type", "")
         fields: dict[str, str] = {}
         files: dict[str, str] = {}
@@ -173,6 +242,7 @@ class Handler(BaseHTTPRequestHandler):
             "title": title,
             "video": video,
             "srt": files.get("srt") or fields.get("srt") or "",
+            "voice": fields.get("voice") or self.voice,
             "status": "queued",
             "error": "",
             "output": "",
@@ -180,13 +250,62 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             JOBS[job_id] = job
             QUEUE.append(job_id)
-        self._json(202, job)
+        self._json(202, _public_job(job))
+
+    def _reveal(self, body: bytes) -> None:
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except json.JSONDecodeError:
+            self._json(400, {"error": "bad request"})
+            return
+        target = _safe_output(str(payload.get("id") or ""), "dubbed.mp4")
+        if target is None:
+            self._json(404, {"error": "not ready"})
+            return
+        if sys.platform == "darwin":
+            subprocess.run(["open", "-R", str(target)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(target.parent)], check=False)
+        self._json(200, {"ok": True})
+
+
+def bind_server(port: int = 7860, voice: str = DEFAULT_VOICE) -> ThreadingHTTPServer:
+    Handler.voice = voice
+    last_error: OSError | None = None
+    server = None
+    for candidate in range(port, port + 20):
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", candidate), Handler)
+            break
+        except OSError as exc:
+            last_error = exc
+    if server is None:
+        raise OSError(f"no free port from {port} to {port + 19}") from last_error
+    print(f"jobs    {data_home() / 'jobs'}", flush=True)
+    return server
+
+
+def activate(server: ThreadingHTTPServer, voice: str) -> None:
+    global _SERVING, _WORKER_STARTED
+    if not _WORKER_STARTED:
+        threading.Thread(target=_worker, args=(voice,), daemon=True).start()
+        _WORKER_STARTED = True
+    if not _SERVING:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        _SERVING = True
+
+
+def start_server(port: int = 7860, voice: str = DEFAULT_VOICE) -> ThreadingHTTPServer:
+    server = bind_server(port, voice)
+    activate(server, voice)
+    return server
 
 
 def serve(port: int = 7860, voice: str = DEFAULT_VOICE) -> None:
-    Handler.voice = voice
-    thread = threading.Thread(target=_worker, args=(voice,), daemon=True)
-    thread.start()
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"lecturedub  http://127.0.0.1:{port}", flush=True)
-    server.serve_forever()
+    server = start_server(port, voice)
+    bound = server.server_address[1]
+    print(f"lecturedub  http://127.0.0.1:{bound}", flush=True)
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        server.shutdown()

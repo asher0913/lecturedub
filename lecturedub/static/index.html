@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>lecturedub</title>
+  <title>LectureDub</title>
   <style>
     :root {
       color-scheme: light;
@@ -55,7 +55,7 @@
       padding: 12px 14px;
       font: inherit;
     }
-    button {
+    button, .ghost {
       margin-top: 16px;
       background: var(--accent);
       color: white;
@@ -65,18 +65,29 @@
       font: inherit;
       cursor: pointer;
     }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    .ghost {
+      margin-top: 0;
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--line);
+    }
     .jobs { margin-top: 22px; display: grid; gap: 12px; }
-    .job { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+    .job { display: grid; gap: 10px; }
     .status { color: var(--muted); font-size: 14px; }
     .status.done { color: var(--ok); }
     .status.error { color: var(--accent); white-space: pre-wrap; }
+    .bar { height: 6px; background: #efe6da; border-radius: 99px; overflow: hidden; }
+    .bar span { display: block; height: 100%; background: var(--accent); }
+    .files { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     a { color: var(--accent); }
+    footer { margin-top: 28px; color: var(--muted); font-size: 13px; }
   </style>
 </head>
 <body>
   <main>
-    <h1>lecturedub</h1>
-    <p class="lede">把一节英文课拖进来，或者贴上视频链接。它会在这台 Mac 的 GPU 上转录、改成口语中文，再按原来的时间轴配音，替换掉英文音轨。</p>
+    <h1>LectureDub</h1>
+    <p class="lede">把一节英文课拖进来，或者贴上视频链接。转录、口语中文和配音都在这台 Mac 的 GPU 上完成，按原来的时间轴替换英文音轨。画面不重新编码。</p>
     <form id="form">
       <div class="drop" id="drop">
         <div>
@@ -93,16 +104,25 @@
         <option value="Serena">Serena · 温和女声</option>
         <option value="Vivian">Vivian · 明亮女声</option>
       </select>
-      <button type="submit">开始配音</button>
+      <button id="submit" type="submit">开始配音</button>
     </form>
     <section class="jobs" id="jobs"></section>
+    <footer id="foot">视频只保存在这台电脑上。第一次运行会下载模型，一节课通常要几十分钟。16 GB 内存请一次只配一节。</footer>
   </main>
   <script>
     const drop = document.querySelector("#drop");
     const video = document.querySelector("#video");
     const jobs = document.querySelector("#jobs");
     const fileLabel = document.querySelector("#file-label");
+    const submit = document.querySelector("#submit");
+    const stages = { asr: "正在转录", translate: "正在翻译", voice: "正在配音", mux: "正在封装" };
     let srtFile = null;
+
+    fetch("/api/config").then((response) => response.json()).then((config) => {
+      if (config.voice) document.querySelector("#voice").value = config.voice;
+      if (config.version) document.querySelector("#foot").textContent += `  ·  v${config.version}`;
+    }).catch(() => {});
+
     drop.addEventListener("click", () => video.click());
     ["dragover", "dragenter"].forEach((name) => drop.addEventListener(name, (event) => {
       event.preventDefault();
@@ -114,6 +134,7 @@
     }));
     drop.addEventListener("drop", (event) => takeFiles(event.dataTransfer.files));
     video.addEventListener("change", () => takeFiles(video.files));
+
     function takeFiles(list) {
       for (const file of list) {
         if (/\.(srt|vtt)$/i.test(file.name)) srtFile = file;
@@ -126,37 +147,99 @@
       }
       if (srtFile) fileLabel.textContent += `  ·  字幕 ${srtFile.name}`;
     }
+
     document.querySelector("#form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const data = new FormData();
       if (video.files[0]) data.append("video", video.files[0]);
       if (srtFile) data.append("srt", srtFile);
       data.append("url", document.querySelector("#url").value.trim());
+      data.append("voice", document.querySelector("#voice").value);
       data.append("title", video.files[0] ? video.files[0].name.replace(/\.[^.]+$/, "") : "lecture");
-      const response = await fetch("/api/jobs", { method: "POST", body: data });
-      const job = await response.json();
-      if (!response.ok) {
-        alert(job.error || "没有收到视频");
-        return;
+      submit.disabled = true;
+      try {
+        const response = await fetch("/api/jobs", { method: "POST", body: data });
+        const job = await response.json();
+        if (!response.ok) {
+          alert(job.error || "没有收到视频");
+          return;
+        }
+        document.querySelector("#url").value = "";
+        srtFile = null;
+        video.value = "";
+        fileLabel.textContent = "也可以只贴下面的链接。有英文字幕的话一并拖进来。";
+        refresh();
+      } finally {
+        submit.disabled = false;
       }
-      document.querySelector("#url").value = "";
-      srtFile = null;
-      video.value = "";
-      fileLabel.textContent = "也可以只贴下面的链接。有英文字幕的话一并拖进来。";
-      refresh();
     });
+
+    function fileLabelFor(name) {
+      if (name.endsWith(".zh.srt")) return "中文字幕";
+      if (name.endsWith(".en.srt")) return "英文字幕";
+      return "下载视频";
+    }
+
+    async function reveal(id) {
+      await fetch("/api/reveal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+    }
+
     async function refresh() {
       const response = await fetch("/api/jobs");
       const payload = await response.json();
-      jobs.innerHTML = "";
+      jobs.replaceChildren();
       for (const job of payload.jobs.slice().reverse()) {
         const row = document.createElement("article");
         row.className = "job";
-        const status = job.status === "done"
-          ? `<a href="/files/${job.id}/dubbed.mp4">下载配音视频</a>`
-          : (job.error || job.status);
-        row.innerHTML = `<div><strong>${job.title}</strong><div class="status ${job.status}">${status}</div></div>`;
-        jobs.appendChild(row);
+        const title = document.createElement("strong");
+        title.textContent = job.title;
+        const status = document.createElement("div");
+        status.className = `status ${job.status}`;
+        if (job.status === "running" && job.total) {
+          const name = stages[job.stage] || "正在处理";
+          status.textContent = `${name}  ${job.done || 0}/${job.total}`;
+        } else if (job.status === "running") {
+          status.textContent = stages[job.stage] || "排队中，正在准备";
+        } else if (job.status === "queued") {
+          status.textContent = "排队中";
+        } else if (job.status === "error") {
+          status.textContent = job.error || "失败";
+        } else if (job.status === "done") {
+          status.textContent = "配音完成";
+        } else {
+          status.textContent = job.status;
+        }
+        row.append(title, status);
+        if (job.status === "running" && job.total) {
+          const bar = document.createElement("div");
+          bar.className = "bar";
+          const fill = document.createElement("span");
+          fill.style.width = `${Math.max(4, Math.round(100 * (job.done || 0) / job.total))}%`;
+          bar.append(fill);
+          row.append(bar);
+        }
+        if (job.files && job.files.length) {
+          const files = document.createElement("div");
+          files.className = "files";
+          for (const name of job.files) {
+            const link = document.createElement("a");
+            link.href = `/files/${job.id}/${encodeURIComponent(name)}`;
+            link.textContent = fileLabelFor(name);
+            files.append(link);
+          }
+          const show = document.createElement("button");
+          show.type = "button";
+          show.className = "ghost";
+          show.textContent = "在 Finder 中显示";
+          show.addEventListener("click", () => reveal(job.id));
+          files.append(show);
+          row.append(files);
+        }
+        jobs.append(row);
       }
     }
     refresh();

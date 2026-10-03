@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .desktop import doctor, install_macos_app, open_app
 from .pipeline import job_from_item, mux_ready, prefetch, run_batch
 from .voice import DEFAULT_VOICE
 
@@ -54,9 +55,17 @@ def main(argv: list[str] | None = None) -> None:
     fetch.add_argument("--output-dir", default="output")
     fetch.add_argument("--work-dir", default="work/lectures")
 
-    ui = sub.add_parser("ui", help="open the local drag-and-drop app")
+    ui = sub.add_parser("ui", help="serve the app in a browser tab")
     ui.add_argument("--port", type=int, default=7860)
     ui.add_argument("--voice", default=DEFAULT_VOICE)
+
+    app = sub.add_parser("app", help="open the desktop window")
+    app.add_argument("--port", type=int, default=7860)
+    app.add_argument("--voice", default=DEFAULT_VOICE)
+    app.add_argument("--browser", action="store_true", help="open a browser tab instead of a window")
+
+    sub.add_parser("install-app", help="install LectureDub.app into ~/Applications")
+    sub.add_parser("doctor", help="check that this Mac can run lecturedub")
 
     args = parser.parse_args(argv)
     if args.command == "ui":
@@ -64,6 +73,19 @@ def main(argv: list[str] | None = None) -> None:
 
         serve(port=args.port, voice=args.voice)
         return
+
+    if args.command == "app":
+        open_app(port=args.port, voice=args.voice, browser=args.browser)
+        return
+
+    if args.command == "install-app":
+        dest = install_macos_app()
+        print(dest)
+        print("Open LectureDub from the Applications folder.")
+        return
+
+    if args.command == "doctor":
+        raise SystemExit(doctor())
 
     if args.command == "mux":
         items = _load_manifest(Path(args.manifest))

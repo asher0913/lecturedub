@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lecturedub"
-version = "0.1.0"
+version = "0.2.0"
 description = "Timestamp-aligned Chinese dubbing for lecture videos, running locally on Apple Silicon."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,6 +18,13 @@ dependencies = [
   "numpy>=1.26",
   "yt-dlp>=2024.1.1",
 ]
+
+[project.optional-dependencies]
+desktop = ["pywebview>=5.3"]
+dev = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://github.com/asher0913/lecturedub"
 
 [project.scripts]
 lecturedub = "lecturedub.__main__:main"

@@ -1,43 +1,49 @@
 # lecturedub
 
-把一节英文课，做成时间轴对齐的中文配音视频。模型在 Apple Silicon 的 GPU 上本地运行，视频不用上传。
+把一节英文课做成时间轴对齐的中文配音视频。模型在 Apple Silicon 的 GPU 上本地运行，视频不会上传。
 
-Drop in an English lecture, or paste a link. The tool transcribes it, rewrites it as spoken Chinese, synthesizes a voice on the original timestamps, and replaces the English soundtrack.
-
-## What it does
-
-1. Reads a video file, a direct media URL, or a page URL that yt-dlp understands.
-2. Uses an English subtitle file when you have one. Otherwise it transcribes with Qwen3-ASR.
-3. Corrects the English and rewrites each phrase as spoken Chinese with Qwen3.
-4. Speaks the Chinese with Qwen3-TTS, then fits each phrase to the original timing.
-5. Writes a new MP4: the original picture is copied, the English soundtrack is replaced with Chinese speech, and one subtitle track shows Chinese and English together. Separate `.zh.srt` and `.en.srt` files are written next to the video.
-
-## Requirements
-
-- Apple Silicon Mac. MLX runs the models on the GPU.
-- 16 GB of memory is enough for the default models if stages run one at a time. More memory lets you switch in larger models.
-- ffmpeg (`brew install ffmpeg`)
-- Python 3.11+
+Drop in an English lecture, or paste a link. The tool transcribes it, rewrites it as spoken Chinese, synthesizes a voice on the original timestamps, and replaces the English soundtrack. The picture is copied as-is.
 
 ## Install
 
+Apple Silicon Mac, Python 3.11+, and ffmpeg.
+
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+git clone https://github.com/asher0913/lecturedub.git
+cd lecturedub
+./install.sh
 ```
 
-The first run downloads the models from Hugging Face.
+`install.sh` creates a virtualenv, installs the desktop window, and puts **LectureDub** in your Applications folder. Open that app and drop a video on the window.
 
-## Use the app
+The first run downloads the models from Hugging Face. One lecture usually takes several tens of minutes. On a 16 GB Mac, dub one lecture at a time.
+
+You can also install the command into an existing environment:
 
 ```bash
+pip install "lecturedub[desktop] @ git+https://github.com/asher0913/lecturedub.git"
+lecturedub doctor
+lecturedub install-app
+lecturedub app
+```
+
+Without the desktop extra, `lecturedub app --browser` opens the same interface in a browser.
+
+## Desktop app
+
+The window is the whole interface: drop a video, or paste a link, and optionally add an English `.srt` or `.vtt`. Choose a voice and start. Finished videos are saved on this Mac. Use **在 Finder 中显示** to jump to the file.
+
+```bash
+lecturedub app
+lecturedub app --browser
 lecturedub ui
 ```
 
-Open http://127.0.0.1:7860 and drop a video, or paste a link. If you already have English subtitles, drop the `.srt` or `.vtt` file too.
+`lecturedub ui` only serves the page. `lecturedub app` opens a native window when `pywebview` is installed.
 
-## Use the command line
+Jobs from the app are stored in `~/Library/Application Support/LectureDub/jobs`.
+
+## Command line
 
 ```bash
 lecturedub run lecture.mp4 -o lecture-zh.mp4
@@ -56,6 +62,14 @@ A batch manifest is a JSON list:
 ```
 
 `video` and `srt` can each be a filesystem path or an `http` URL.
+
+## What it does
+
+1. Reads a video file, a direct media URL, or a page URL that yt-dlp understands.
+2. Uses an English subtitle file when you have one. Otherwise it transcribes with Qwen3-ASR.
+3. Corrects the English and rewrites each phrase as spoken Chinese with Qwen3.
+4. Speaks the Chinese with Qwen3-TTS, then fits each phrase to the original timing.
+5. Writes a new MP4: the original picture is copied, the English soundtrack is replaced with Chinese speech, and one subtitle track shows Chinese and English together. Separate `.zh.srt` and `.en.srt` files are written next to the video.
 
 ## Voices
 
@@ -77,8 +91,17 @@ Defaults are the strongest downloadable models for each stage, at full precision
 
 ## Timing
 
-Chinese lines are written to a length that matches the original phrase. Each clip is placed at the original start time. Small gaps stay silent. If a line still runs long, it is sped up slightly, and never enough to sound like a chipmunk. The picture is copied, not re-encoded.
+Chinese lines are written to a length that matches the original phrase. Each clip is placed at the original start time. Small gaps stay silent. If a line still runs long, it is sped up slightly, and never enough to sound like a chipmunk.
 
 ## Privacy
 
-Recognition, translation, and speech all run on this computer. The tool does not upload your lectures. Downloaded media and finished videos stay in `work/` and `output/`, which are gitignored.
+Recognition, translation, and speech all run on this computer. The tool does not upload your lectures. Command-line jobs use the `work/` directory you pass in. The desktop app uses `~/Library/Application Support/LectureDub`.
+
+## Develop
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[desktop,dev]"
+python -m pytest
+```
