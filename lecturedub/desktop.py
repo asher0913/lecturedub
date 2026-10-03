@@ -142,20 +142,37 @@ def doctor() -> int:
     from .media import FFMPEG, FFPROBE
     from .paths import data_home
 
+    from .runtime import backend
+
     print(f"lecturedub {__version__}")
     print(f"python {sys.version.split()[0]}  {platform.machine()}")
     print(f"system {platform.platform()}")
     ok = True
-    if sys.platform == "darwin" and platform.machine() == "arm64":
-        print("models: Apple Silicon")
+    if backend() == "mlx":
+        print("models: Apple Silicon, MLX")
     else:
-        print("models: Apple Silicon required. MLX does not run on this machine.")
-        ok = False
+        try:
+            import torch
+        except ImportError:
+            print("models: NVIDIA extra is missing. Install with: pip install 'lecturedub[nvidia]'")
+            ok = False
+        else:
+            if torch.cuda.is_available():
+                name = torch.cuda.get_device_name(0)
+                print(f"models: NVIDIA {name}")
+            else:
+                print("models: no NVIDIA GPU with CUDA. Install the driver and a CUDA build of PyTorch.")
+                ok = False
+    hint = "brew install ffmpeg"
+    if sys.platform == "win32":
+        hint = "winget install Gyan.FFmpeg"
+    elif sys.platform != "darwin":
+        hint = "sudo apt install ffmpeg"
     for label, path in (("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)):
         if Path(path).exists():
             print(f"{label}: {path}")
         else:
-            print(f"{label}: missing. Install with: brew install ffmpeg")
+            print(f"{label}: missing. Install with: {hint}")
             ok = False
     try:
         import webview

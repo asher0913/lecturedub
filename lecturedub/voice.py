@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from .media import atempo
+from .runtime import backend, cuda_device, default_tts, require_cuda, torch_dtype
 from .subtitles import speakable_units
 from .translate import Line
 
@@ -44,9 +45,18 @@ def configure_metal() -> None:
 def release_memory() -> None:
     import gc
 
+    gc.collect()
+    if backend() != "mlx":
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        return
     import mlx.core as mx
 
-    gc.collect()
     try:
         mx.clear_cache()
     except Exception:
@@ -87,15 +97,35 @@ def _fade(audio: np.ndarray, sample_rate: int, ms: float = 12) -> np.ndarray:
 
 class Speaker:
     def __init__(self, model_id: str = DEFAULT_TTS, voice: str = DEFAULT_VOICE):
-        from mlx_audio.tts.utils import load_model
-
-        configure_metal()
-        self.model = load_model(model_id)
         self.voice = voice
-        self.sample_rate = int(self.model.sample_rate)
         self.model_id = model_id
+        if backend() == "mlx":
+            from mlx_audio.tts.utils import load_model
+
+            configure_metal()
+            self.model = load_model(model_id)
+            self.sample_rate = int(self.model.sample_rate)
+            self._backend = "mlx"
+            return
+        if "mlx-community" in model_id:
+            self.model_id = default_tts()
+        from qwen_tts import Qwen3TTSModel
+
+        device = require_cuda()
+        self.model = Qwen3TTSModel.from_pretrained(
+            self.model_id,
+            device_map=device,
+            dtype=torch_dtype(),
+        )
+        self.sample_rate = int(getattr(self.model, "sample_rate", 24000) or 24000)
+        self._backend = "cuda"
 
     def synthesize(self, text: str, instruct: str | None = None) -> np.ndarray:
+        if self._backend == "mlx":
+            return self._synthesize_mlx(text, instruct)
+        return self._synthesize_cuda(text, instruct)
+
+    def _synthesize_mlx(self, text: str, instruct: str | None) -> np.ndarray:
         pieces = []
         for result in self.model.generate_custom_voice(
             text=text,
@@ -113,6 +143,28 @@ class Speaker:
         if not pieces:
             return np.zeros(int(self.sample_rate * 0.2), dtype=np.float32)
         return _trim(np.concatenate(pieces), self.sample_rate)
+
+    def _synthesize_cuda(self, text: str, instruct: str | None) -> np.ndarray:
+        kwargs = {
+            "text": text,
+            "language": "Chinese",
+            "speaker": self.voice,
+            "instruct": instruct or INSTRUCT,
+            "temperature": 0.5,
+            "max_new_tokens": 4096,
+        }
+        try:
+            wavs, sample_rate = self.model.generate_custom_voice(**kwargs)
+        except TypeError:
+            wavs, sample_rate = self.model.generate_custom_voice(
+                text=text,
+                language="Chinese",
+                speaker=self.voice,
+                instruct=instruct or INSTRUCT,
+            )
+        self.sample_rate = int(sample_rate)
+        audio = wavs[0] if isinstance(wavs, (list, tuple)) else wavs
+        return _trim(_as_audio(audio), self.sample_rate)
 
     def units_per_second(self) -> float:
         audio = self.synthesize(CALIBRATION)

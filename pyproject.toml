@@ -4,22 +4,31 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lecturedub"
-version = "0.2.0"
-description = "Timestamp-aligned Chinese dubbing for lecture videos, running locally on Apple Silicon."
+version = "0.3.0"
+description = "Timestamp-aligned Chinese dubbing for lecture videos, locally on Apple Silicon or an NVIDIA GPU."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-authors = [{name = "lecturedub contributors"}]
+authors = [{name = "Yixuan Zhang"}]
 dependencies = [
-  "mlx-qwen3-asr>=0.4.4",
-  "mlx-lm>=0.32.0",
-  "mlx-audio>=0.5.0",
   "soundfile>=0.12",
   "numpy>=1.26",
   "yt-dlp>=2024.1.1",
 ]
 
 [project.optional-dependencies]
+apple = [
+  "mlx-qwen3-asr>=0.4.4",
+  "mlx-lm>=0.32.0",
+  "mlx-audio>=0.5.0",
+]
+nvidia = [
+  "qwen-asr",
+  "qwen-tts",
+  "transformers>=4.57",
+  "accelerate>=1.2",
+  "bitsandbytes>=0.45",
+]
 desktop = ["pywebview>=5.3"]
 dev = ["pytest>=8"]
 

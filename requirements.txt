@@ -1,6 +1,6 @@
-mlx-qwen3-asr>=0.4.4
-mlx-lm>=0.32.0
-mlx-audio>=0.5.0
+# Shared libraries. Also install one backend:
+#   pip install -e ".[apple,desktop]"    Apple Silicon
+#   pip install -e ".[nvidia,desktop]"   Windows or Linux with an NVIDIA GPU
 soundfile>=0.12
 numpy>=1.26
 yt-dlp>=2024.1.1

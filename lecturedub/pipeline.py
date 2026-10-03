@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .asr import DEFAULT_ASR, transcribe_to_srt
+from .runtime import backend, default_llm, default_tts
 from .media import (
     MediaError,
     download,
@@ -25,8 +26,8 @@ from .media import (
     write_timeline_wav,
 )
 from .subtitles import Cue, group_cues, parse_subtitles, write_srt
-from .translate import DEFAULT_LLM, Line, Translator, translate_cues
-from .voice import DEFAULT_TTS, DEFAULT_VOICE, Speaker, release_memory, render_timeline
+from .translate import Line, Translator, translate_cues
+from .voice import DEFAULT_VOICE, Speaker, release_memory, render_timeline
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -350,13 +351,14 @@ def run_batch(
                 model_id=asr_model,
                 work_wav=job.marker("audio16k.wav"),
             )
-        from mlx_qwen3_asr.load_models import _ModelHolder
+        if backend() == "mlx":
+            from mlx_qwen3_asr.load_models import _ModelHolder
 
-        _ModelHolder.clear()
+            _ModelHolder.clear()
         release_memory()
 
-    tts_id = env_model("LECTUREDUB_TTS", DEFAULT_TTS)
-    llm_id = env_model("LECTUREDUB_LLM", DEFAULT_LLM)
+    tts_id = env_model("LECTUREDUB_TTS", default_tts())
+    llm_id = env_model("LECTUREDUB_LLM", default_llm())
     log(f"load voice  {tts_id}  {voice}", log_path)
     speaker = Speaker(tts_id, voice)
     rate = speaker.units_per_second()

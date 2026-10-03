@@ -6,6 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 
+from .runtime import backend, cuda_device, default_llm, require_cuda, torch_dtype
 from .subtitles import Cue, speakable_units
 
 DEFAULT_LLM = "mlx-community/Qwen3-8B-4bit"
@@ -78,14 +79,19 @@ def _sanitize(text: str) -> str:
 
 class Translator:
     def __init__(self, model_id: str = DEFAULT_LLM):
-        from mlx_lm import load
-
-        self.model, self.tokenizer = load(model_id)
         self.model_id = model_id
+        if backend() == "mlx":
+            from mlx_lm import load
+
+            self.model, self.tokenizer = load(model_id)
+            self._backend = "mlx"
+            return
+        if model_id.startswith("mlx-community/"):
+            self.model_id = default_llm()
+        self._backend = "cuda"
+        self.model, self.tokenizer = _load_cuda_llm(self.model_id)
 
     def complete(self, user: str, max_tokens: int) -> str:
-        from mlx_lm import generate
-
         messages = [{"role": "user", "content": user}]
         try:
             prompt = self.tokenizer.apply_chat_template(
@@ -100,13 +106,17 @@ class Translator:
                 tokenize=False,
                 add_generation_prompt=True,
             )
-        return generate(
-            self.model,
-            self.tokenizer,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            verbose=False,
-        )
+        if self._backend == "mlx":
+            from mlx_lm import generate
+
+            return generate(
+                self.model,
+                self.tokenizer,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                verbose=False,
+            )
+        return _cuda_generate(self.model, self.tokenizer, prompt, max_tokens)
 
     def translate_batch(self, items: list[dict]) -> dict[int, dict]:
         prompt = PROMPT.format(payload=json.dumps(items, ensure_ascii=False))
@@ -153,6 +163,47 @@ class Translator:
         if not zh:
             return None
         return {"en": _sanitize(str(row.get("en") or "")) or item["en"], "zh": zh}
+
+
+def _load_cuda_llm(model_id: str):
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+    require_cuda()
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    vram = torch.cuda.get_device_properties(0).total_memory
+    kwargs = {"device_map": cuda_device()}
+    if vram < 18 * 1024**3:
+        try:
+            import bitsandbytes  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(
+                "This NVIDIA GPU has less than 18 GB. Install bitsandbytes so translation can run in 4-bit, "
+                "or set LECTUREDUB_LLM to a 4-bit Qwen3 checkpoint."
+            ) from exc
+        kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+    else:
+        kwargs["torch_dtype"] = torch_dtype()
+    model = AutoModelForCausalLM.from_pretrained(model_id, **kwargs)
+    return model, tokenizer
+
+
+def _cuda_generate(model, tokenizer, prompt: str, max_tokens: int) -> str:
+    import torch
+
+    device = next(model.parameters()).device
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    with torch.inference_mode():
+        output = model.generate(
+            **inputs,
+            max_new_tokens=max_tokens,
+            do_sample=False,
+        )
+    new_tokens = output[0, inputs["input_ids"].shape[-1] :]
+    return tokenizer.decode(new_tokens, skip_special_tokens=True)
 
 
 def repair_english(text: str, following: str) -> str:

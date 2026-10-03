@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> None:
     app.add_argument("--browser", action="store_true", help="open a browser tab instead of a window")
 
     sub.add_parser("install-app", help="install LectureDub.app into ~/Applications")
-    sub.add_parser("doctor", help="check that this Mac can run lecturedub")
+    sub.add_parser("doctor", help="check that this computer can run lecturedub")
 
     args = parser.parse_args(argv)
     if args.command == "ui":
